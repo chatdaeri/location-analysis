@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{SITE_NAME}} 입지분석 지도</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Noto Sans KR', sans-serif; background: #f0f2f5; color: #1a1a2e; }
+  .header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    color: #fff; padding: 28px 32px 20px; position: relative; overflow: hidden;
+  }
+  .header::after {
+    content: ''; position: absolute; top: -50%; right: -10%;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(233,69,96,0.15) 0%, transparent 70%);
+    border-radius: 50%;
+  }
+  .header h1 { font-size: 22px; font-weight: 900; letter-spacing: -0.5px; margin-bottom: 4px; }
+  .header p { font-size: 13px; color: rgba(255,255,255,0.65); font-weight: 400; }
+  .container { display: flex; height: calc(100vh - 88px); }
+  .sidebar {
+    width: 320px; min-width: 320px; background: #fff;
+    border-right: 1px solid #e2e6ea; overflow-y: auto; padding: 16px 0;
+  }
+  .category-group { margin-bottom: 8px; }
+  .category-title {
+    display: flex; align-items: center; gap: 8px; padding: 10px 20px;
+    font-size: 13px; font-weight: 700; color: #555; letter-spacing: 0.5px;
+    cursor: pointer; user-select: none; transition: background 0.15s;
+  }
+  .category-title:hover { background: #f7f8fa; }
+  .category-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .category-toggle { margin-left: auto; font-size: 11px; color: #aaa; font-weight: 500; }
+  .place-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 20px 9px 38px; cursor: pointer;
+    transition: all 0.15s; border-left: 3px solid transparent;
+  }
+  .place-item:hover { background: #f7f8fa; }
+  .place-item.active { background: #f0f4ff; border-left-color: #3b82f6; }
+  .place-item.hidden-place { opacity: 0.35; }
+  .place-item .dot { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
+  .place-item .name { font-size: 13px; font-weight: 500; color: #333; flex: 1; }
+  .place-item .distance { font-size: 11px; color: #999; white-space: nowrap; }
+  .place-item .toggle-icon { font-size: 14px; color: #bbb; width: 18px; text-align: center; }
+  #map { flex: 1; z-index: 1; }
+  .legend-bar {
+    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 1000; background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
+    border-radius: 12px; padding: 10px 18px; display: flex; gap: 16px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12); font-size: 11px; font-weight: 500;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; color: #555; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+  @media (max-width: 768px) {
+    .container { flex-direction: column; height: auto; }
+    .sidebar { width: 100%; min-width: 100%; max-height: 40vh; }
+    #map { height: 60vh; }
+    .legend-bar { display: none; }
+  }
+</style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+</head>
+<body>
+
+<div class="header">
+  <h1>{{SITE_NAME}} — 입지분석 지도</h1>
+  <p>{{SITE_ADDRESS}} · 위 {{SITE_LAT}} / 경 {{SITE_LNG}}</p>
+</div>
+
+<div class="container">
+  <div class="sidebar" id="sidebar"></div>
+  <div id="map"></div>
+</div>
+
+<div class="legend-bar" id="legend"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+
+const CENTER = [{{SITE_LAT}}, {{SITE_LNG}}];
+
+const CATEGORIES = {
+  '사업지': { color: '#e94560', icon: '🏠' },
+  '교통': { color: '#3b82f6', icon: '🚇' },
+  '경쟁단지': { color: '#8b5cf6', icon: '🏢' },
+  '초등학교': { color: '#10b981', icon: '🏫' },
+  '중·고등학교': { color: '#059669', icon: '🎓' },
+  '대형마트': { color: '#f59e0b', icon: '🛒' },
+  '공원': { color: '#22c55e', icon: '🌳' },
+  '시장': { color: '#ef4444', icon: '🏪' },
+  '병원': { color: '#ec4899', icon: '🏥' },
+  '학원': { color: '#6366f1', icon: '📚' },
+  '호재': { color: '#0ea5e9', icon: '⭐' }
+};
+
+/* ===== 동적 데이터: 아래 PLACES 배열만 사업지별로 교체하면 됨 ===== */
+const PLACES = {{PLACES_JSON}};
+/* ===== 동적 데이터 끝 ===== */
+
+// State
+const visibility = {};
+PLACES.forEach((p, i) => { visibility[i] = true; });
+
+// Map
+const map = L.map('map', { zoomControl: true }).setView(CENTER, 15);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19
+}).addTo(map);
+
+// 마커 크기를 미리 측정 (화면 밖에서 렌더링 후 측정)
+function measureMarkerSize(htmlStr) {
+  const measurer = document.createElement('div');
+  measurer.style.cssText = 'position:absolute;left:-9999px;top:-9999px;visibility:hidden;';
+  measurer.innerHTML = htmlStr;
+  document.body.appendChild(measurer);
+  const w = measurer.offsetWidth;
+  const h = measurer.offsetHeight;
+  document.body.removeChild(measurer);
+  return { w, h };
+}
+
+// Custom marker
+function createMarker(place) {
+  const cat = CATEGORIES[place.cat];
+  const isSite = place.cat === '사업지';
+  const bgColor = cat.color;
+  const label = place.name.split('(')[0].trim();
+  const zIdx = isSite ? 1000 : 500;
+  const fontSize = isSite ? 13 : 11;
+  const fontWeight = isSite ? 800 : 600;
+  const padV = isSite ? 8 : 6;
+  const padH = isSite ? 16 : 12;
+  const borderW = isSite ? 2.5 : 1.5;
+  const shadow = isSite
+    ? '0 3px 10px rgba(233,69,96,0.5), 0 1px 3px rgba(0,0,0,0.2)'
+    : '0 2px 6px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.15)';
+  const arrowSize = isSite ? 8 : 7;
+
+  const html = `<div style="position:relative;display:inline-block;">
+    <div style="
+      background:${bgColor};color:#fff;
+      font-family:'Noto Sans KR',sans-serif;
+      font-size:${fontSize}px;font-weight:${fontWeight};
+      padding:${padV}px ${padH}px;border-radius:8px;
+      white-space:nowrap;text-align:center;line-height:1.4;
+      letter-spacing:0.2px;text-shadow:0 1px 2px rgba(0,0,0,0.3);
+      box-shadow:${shadow};border:${borderW}px solid #fff;
+      position:relative;z-index:2;
+    ">${label}</div>
+    <div style="
+      position:absolute;bottom:-${arrowSize}px;left:50%;
+      transform:translateX(-50%);width:0;height:0;
+      border-left:${arrowSize}px solid transparent;
+      border-right:${arrowSize}px solid transparent;
+      border-top:${arrowSize}px solid ${bgColor};
+      filter:drop-shadow(0 2px 2px rgba(0,0,0,0.15));z-index:1;
+    "></div>
+  </div>`;
+
+  const size = measureMarkerSize(html);
+  const icon = L.divIcon({
+    html: html, className: '',
+    iconSize: [size.w, size.h],
+    iconAnchor: [Math.round(size.w / 2), size.h]
+  });
+  return L.marker([place.lat, place.lng], { icon, zIndexOffset: zIdx });
+}
+
+// Create all markers
+const markers = PLACES.map(p => createMarker(p));
+markers.forEach(m => m.addTo(map));
+
+// Sidebar
+function renderSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.innerHTML = '';
+  const grouped = {};
+  PLACES.forEach((p, i) => {
+    if (!grouped[p.cat]) grouped[p.cat] = [];
+    grouped[p.cat].push({ ...p, idx: i });
+  });
+  for (const [catName, items] of Object.entries(grouped)) {
+    const cat = CATEGORIES[catName];
+    const group = document.createElement('div');
+    group.className = 'category-group';
+    const allVisible = items.every(it => visibility[it.idx]);
+    const title = document.createElement('div');
+    title.className = 'category-title';
+    title.innerHTML = `<span class="category-dot" style="background:${cat.color}"></span>${cat.icon} ${catName} (${items.length})<span class="category-toggle">${allVisible ? '전체 숨김' : '전체 표시'}</span>`;
+    title.addEventListener('click', () => {
+      const targetState = !allVisible;
+      items.forEach(it => {
+        visibility[it.idx] = targetState;
+        if (targetState) markers[it.idx].addTo(map);
+        else map.removeLayer(markers[it.idx]);
+      });
+      renderSidebar();
+    });
+    group.appendChild(title);
+    items.forEach(it => {
+      const item = document.createElement('div');
+      item.className = 'place-item' + (visibility[it.idx] ? '' : ' hidden-place');
+      item.innerHTML = `
+        <span class="dot" style="background:${cat.color}"></span>
+        <span class="name">${it.name}</span>
+        <span class="distance">${it.dist}</span>
+        <span class="toggle-icon">${visibility[it.idx] ? '👁' : '—'}</span>`;
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        visibility[it.idx] = !visibility[it.idx];
+        if (visibility[it.idx]) {
+          markers[it.idx].addTo(map);
+          map.panTo([it.lat, it.lng], { animate: true });
+        } else { map.removeLayer(markers[it.idx]); }
+        renderSidebar();
+      });
+      group.appendChild(item);
+    });
+    sidebar.appendChild(group);
+  }
+}
+renderSidebar();
+
+// Legend
+const legend = document.getElementById('legend');
+for (const [catName, cat] of Object.entries(CATEGORIES)) {
+  legend.innerHTML += `<div class="legend-item"><span class="legend-dot" style="background:${cat.color}"></span>${catName}</div>`;
+}
+
+});
+</script>
+</body>
+</html>
