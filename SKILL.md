@@ -2,7 +2,8 @@
 name: location-analysis
 description: >
   사업지명(아파트명, 주소 등)을 입력받아 입지 분석 보고서(텍스트)와 인터랙티브 HTML 지도를
-  자동 생성하는 스킬. Google Places Search로 위경도를 조회하고, Apify MCP(Google Maps Scraper)로
+  자동 생성하는 스킬. Google Places Search로 위경도를 조회하고, Apify MCP가 연결된 경우
+  Apify(Google Maps Scraper)로, 연결되지 않은 경우 클로드 내장 places_search 도구로
   인근 시설(경쟁단지, 공원, 마트, 시장, 지하철역, 학교, 병원, 학원 등)을 탐색한 뒤,
   웹서치로 향후 호재를 조사하여 개조식 + 표 형태의 보고서와 OpenStreetMap 인터랙티브 지도를
   생성한다. HTML 지도는 assets/map-template.html 템플릿을 사용하여 빠르게 생성한다.
@@ -24,14 +25,13 @@ description: >
 | 도구 | 용도 | 비고 |
 |------|------|------|
 | **Google Places Search** (places_search) | 사업지 위경도 조회 | 클로드 내장 도구 |
-| **Apify MCP** (compass/crawler-google-places) | 인근 시설 검색 | MCP 연결 필요 |
+| **Apify MCP** (compass/crawler-google-places) | 인근 시설 검색 (방법 A) | MCP 연결 시 사용 |
+| **places_search** (클로드 내장) | 인근 시설 검색 (방법 B) | Apify 미연결 시 사용 |
 | **웹서치** (web_search) | 향후 호재 조사 | 클로드 내장 도구 |
-
-Apify MCP가 비활성화 상태라면 사용자에게 활성화를 안내한다.
 
 ---
 
-## 전체 워크플로우 (4단계)
+## 전체 워크플로우 (5단계)
 
 ### 1단계: 사업지 위경도 조회
 
@@ -43,7 +43,22 @@ places_search → query: "{사업지명}"
 
 결과에서 lat, lng, address를 추출하여 이후 모든 단계의 기준점으로 사용한다.
 
-### 2단계: Apify Google Maps Scraper로 인근 시설 검색
+### 2단계: 인근 시설 검색 (Apify / 내장도구 분기)
+
+#### ★ 분기 판단 기준
+
+`tool_search`로 Apify MCP 도구가 사용 가능한지 확인한다.
+
+```
+tool_search → query: "Apify Google Places"
+```
+
+- **Apify 도구가 존재하면** → 방법 A (Apify) 사용
+- **Apify 도구가 존재하지 않으면** → 방법 B (내장 places_search) 사용
+
+---
+
+#### 방법 A: Apify Google Maps Scraper (MCP 연결 시)
 
 아래 규칙에 따라 Apify `compass/crawler-google-places`를 호출한다.
 
@@ -78,7 +93,68 @@ places_search → query: "{사업지명}"
 - 위도/경도 (location.lat, location.lng)
 - 사업지로부터의 직선거리 (아래 공식으로 계산)
 
-**카테고리 매핑 규칙:**
+---
+
+#### 방법 B: 클로드 내장 places_search (Apify 미연결 시)
+
+`places_search` 도구를 카테고리별로 호출한다. `location_bias_lat`, `location_bias_lng`, `location_bias_radius`를 설정하여 사업지 주변으로 결과를 집중시킨다.
+
+**호출 규칙:**
+
+| 파라미터 | 값 | 이유 |
+|---------|---|------|
+| `location_bias_lat` | 사업지 위도 | 사업지 중심 검색 |
+| `location_bias_lng` | 사업지 경도 | 사업지 중심 검색 |
+| `location_bias_radius` | `3000` (미터) | 반경 3km 내 검색 |
+| `max_results` | `5` (카테고리당) | 핵심 시설 수집 |
+
+**검색 쿼리 구성 (3~4회 호출로 묶어서 효율화):**
+
+호출 1:
+```json
+{"queries": [
+  {"query": "지하철역 {동명} {시명}", "max_results": 5},
+  {"query": "초등학교 {동명} {시명}", "max_results": 5},
+  {"query": "중학교 {동명} {시명}", "max_results": 5}
+]}
+```
+
+호출 2:
+```json
+{"queries": [
+  {"query": "고등학교 {시명} {지역명}", "max_results": 5},
+  {"query": "대형마트 {동명} {시명}", "max_results": 5},
+  {"query": "공원 {동명} {시명}", "max_results": 5}
+]}
+```
+
+호출 3:
+```json
+{"queries": [
+  {"query": "병원 {시명} {지역명}", "max_results": 5},
+  {"query": "시장 {동명} {시명}", "max_results": 5},
+  {"query": "학원 {동명} {시명}", "max_results": 5}
+]}
+```
+
+호출 4:
+```json
+{"queries": [
+  {"query": "아파트 {동명} {시명} {지역명}", "max_results": 5}
+]}
+```
+
+**결과 정리:** 각 시설에서 아래 정보를 추출한다:
+- 시설명 (name)
+- types 필드 → 스킬 카테고리에 매핑
+- 위도/경도 (latitude, longitude)
+- 사업지로부터의 직선거리 (아래 공식으로 계산)
+
+---
+
+#### 카테고리 매핑 규칙 (공통)
+
+**Apify 결과 매핑:**
 - "아파트", "아파트 단지" → 경쟁단지
 - "지하철역" → 교통
 - "초등학교" → 초등학교
@@ -89,6 +165,17 @@ places_search → query: "{사업지명}"
 - "종합병원", "병원" → 병원
 - "수학학교", "교육기관", "사립학교", "학원" → 학원
 
+**내장 places_search 결과 매핑 (types 필드 기준):**
+- "apartment_complex", "condominium_complex" → 경쟁단지
+- "subway_station", "transit_station" → 교통
+- "primary_school" → 초등학교
+- "secondary_school", "school" (중·고교 검색 결과) → 중·고등학교
+- "hypermarket", "supermarket", "grocery_store" → 대형마트
+- "park" → 공원 (단, "공원묘지"는 제외)
+- "shopping_mall" (시장 검색 결과) → 시장
+- "hospital", "general_hospital", "medical_clinic" → 병원
+- "educational_institution" (학원 검색 결과) → 학원
+
 ### 3단계: 웹서치로 향후 호재 조사
 
 ```
@@ -97,9 +184,11 @@ web_search → "{지역명} 개발 호재 {올해연도} {내년연도}"
 
 찾아야 할 호재 유형: 신규 교통(지하철 연장, GTX 등), 역세권 개발, 산업단지 조성, 재개발/재건축, 대규모 택지 개발 등
 
-### 4단계: 보고서 + HTML 지도 생성
+### 4단계: 텍스트 보고서 출력 (채팅에 직접 출력) ⚠️ 최우선
 
-**4-A. 텍스트 보고서 (채팅에 직접 출력)**
+> **⚠️ 반드시 텍스트 보고서를 먼저 채팅에 출력한다.**
+> HTML 지도 생성은 사용량 제한 등으로 실패할 수 있으므로, 핵심 정보인 텍스트 보고서를 먼저 전달하는 것이 우선이다.
+> **파일을 생성하지 말고 채팅 텍스트로 직접 출력한다.**
 
 아래 형식으로 개조식 + 표로 작성한다. 장문 서술 금지, 핵심만 간결하게.
 
@@ -152,7 +241,10 @@ web_search → "{지역명} 개발 호재 {올해연도} {내년연도}"
 | 미래가치 | ★☆ + 한줄 요약 |
 ```
 
-**4-B. HTML 인터랙티브 지도 생성**
+### 5단계: HTML 인터랙티브 지도 생성
+
+> **⚠️ 이 단계는 4단계(텍스트 보고서) 출력이 완료된 후에 진행한다.**
+> 사용량 제한 등으로 이 단계가 실패하더라도 사용자는 이미 텍스트 보고서를 받은 상태이다.
 
 `assets/map-template.html` 파일을 읽어서 플레이스홀더를 치환한 뒤 저장한다.
 
@@ -213,10 +305,12 @@ web_search → "{지역명} 개발 호재 {올해연도} {내년연도}"
 
 ## 중요 주의사항
 
-1. **텍스트 보고서는 채팅에 바로 출력**한다 (별도 파일 생성 X)
-2. **HTML 지도만 파일로 생성**한다
-3. **Apify locationQuery는 반드시 영문 시 단위**로 설정 (한글 동 단위 X)
-4. **searchStringsArray는 한글 키워드 + 동명** 조합
-5. **공원묘지는 공원 카테고리에서 제외**한다
-6. 호재 정보는 웹서치 출처를 명시한다
-7. 초품아 판정: 초등학교 직선거리 400m 이내
+1. **텍스트 보고서를 먼저 채팅에 출력**한 뒤, **그 다음에 HTML 지도를 생성**한다
+2. 텍스트 보고서는 **별도 파일 생성 없이 채팅 텍스트로 직접 출력**한다
+3. HTML 지도 생성이 실패하더라도 텍스트 보고서는 이미 전달된 상태여야 한다
+4. **Apify MCP 연결 여부를 먼저 확인**하고, 연결 시 Apify / 미연결 시 내장 places_search 사용
+5. **Apify locationQuery는 반드시 영문 시 단위**로 설정 (한글 동 단위 X) — Apify 사용 시에만 해당
+6. **searchStringsArray는 한글 키워드 + 동명** 조합 — Apify 사용 시에만 해당
+7. **공원묘지는 공원 카테고리에서 제외**한다
+8. 호재 정보는 웹서치 출처를 명시한다
+9. 초품아 판정: 초등학교 직선거리 400m 이내
