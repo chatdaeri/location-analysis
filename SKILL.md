@@ -45,16 +45,23 @@ places_search → query: "{사업지명}"
 
 ### 2단계: 인근 시설 검색 (Apify / 내장도구 분기)
 
-#### ★ 분기 판단 기준
+#### ★ 분기 판단 기준 — 방법 A(Apify)를 최우선으로 시도한다
 
-`tool_search`로 Apify MCP 도구가 사용 가능한지 확인한다.
+> ⚠️ **기본 원칙: 방법 A(Apify)가 우선이다.** 방법 B(내장 places_search)는
+> Apify를 쓸 수 없다고 명확히 확인됐을 때만 쓰는 폴백이다. 애매하면 방법 A를 시도한다.
 
-```
-tool_search → query: "Apify Google Places"
-```
+현재 세션에서 **이미 사용 가능한 도구 목록**에 Apify Google Maps Scraper 도구가
+있는지 확인한다. Claude Desktop / claude.ai 환경에서는 연결된 MCP 도구가 도구 목록에
+처음부터 모두 노출되어 있으므로, **별도의 검색 도구(`tool_search` 등)를 호출하지 않는다**
+— 그런 도구는 이 환경에 존재하지 않으며, 호출하려 하면 분기 판단이 실패해 잘못된 폴백이 발생한다.
 
-- **Apify 도구가 존재하면** → 방법 A (Apify) 사용
-- **Apify 도구가 존재하지 않으면** → 방법 B (내장 places_search) 사용
+도구 목록에서 이름에 `apify` 가 포함되고 Google Maps / `crawler-google-places` 와
+관련된 도구(예: Apify Actor 실행 도구)가 있는지 직접 확인한다.
+
+- Apify Google Maps 관련 도구가 도구 목록에 **보이면** → **반드시 방법 A (Apify)** 사용
+- Apify 관련 도구가 도구 목록에 **전혀 없을 때만** → 방법 B (내장 places_search) 사용
+- ⚠️ 판단이 애매하면 **방법 A를 먼저 시도**한다. 방법 A 호출이 실제로 에러로 실패한
+  경우에 한해 방법 B로 폴백하고, 폴백했다는 사실을 보고서 말미에 한 줄로 명시한다.
 
 ---
 
