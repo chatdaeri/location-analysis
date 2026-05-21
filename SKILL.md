@@ -48,20 +48,33 @@ places_search → query: "{사업지명}"
 #### ★ 분기 판단 기준 — 방법 A(Apify)를 최우선으로 시도한다
 
 > ⚠️ **기본 원칙: 방법 A(Apify)가 우선이다.** 방법 B(내장 places_search)는
-> Apify를 쓸 수 없다고 명확히 확인됐을 때만 쓰는 폴백이다. 애매하면 방법 A를 시도한다.
+> Apify 도구를 어디서도 찾을 수 없다고 확인됐을 때만 쓰는 폴백이다. 애매하면 방법 A를 시도한다.
 
-현재 세션에서 **이미 사용 가능한 도구 목록**에 Apify Google Maps Scraper 도구가
-있는지 확인한다. Claude Desktop / claude.ai 환경에서는 연결된 MCP 도구가 도구 목록에
-처음부터 모두 노출되어 있으므로, **별도의 검색 도구(`tool_search` 등)를 호출하지 않는다**
-— 그런 도구는 이 환경에 존재하지 않으며, 호출하려 하면 분기 판단이 실패해 잘못된 폴백이 발생한다.
+Apify Google Maps Scraper 도구를 아래 **3단계 순서로 반드시 모두 확인**한 뒤 분기한다.
+찾는 도구는 이름에 `apify` 가 포함되고 `crawler-google-places` 와 관련된 것
+(예: `Apify:compass--crawler-google-places`, `compass/crawler-google-places`)이다.
 
-도구 목록에서 이름에 `apify` 가 포함되고 Google Maps / `crawler-google-places` 와
-관련된 도구(예: Apify Actor 실행 도구)가 있는지 직접 확인한다.
+**1) 활성 도구 목록 확인** — 현재 바로 호출 가능한 도구 목록에 Apify 도구가 보이면
+   → 그대로 **방법 A** 사용.
 
-- Apify Google Maps 관련 도구가 도구 목록에 **보이면** → **반드시 방법 A (Apify)** 사용
-- Apify 관련 도구가 도구 목록에 **전혀 없을 때만** → 방법 B (내장 places_search) 사용
-- ⚠️ 판단이 애매하면 **방법 A를 먼저 시도**한다. 방법 A 호출이 실제로 에러로 실패한
-  경우에 한해 방법 B로 폴백하고, 폴백했다는 사실을 보고서 말미에 한 줄로 명시한다.
+**2) deferred tools 목록 확인** — 도구가 안 보여도 **방법 B로 넘어가지 않는다.**
+   도구가 많은 환경(Claude Desktop / claude.ai 포함)에서는 MCP 도구가 처음부터 모두
+   노출되지 않고 **deferred tools(지연 로딩 도구)** 상태로 이름만 시스템 프롬프트에
+   올라와 있다. 시스템 프롬프트의 deferred tools 목록에 Apify 도구가 있으면
+   → `tool_search`(또는 `ToolSearch`)로 그 도구를 **먼저 로드**한 뒤 **방법 A** 사용.
+   ```
+   tool_search → query: "select:Apify:compass--crawler-google-places"
+   (또는)  tool_search → query: "Apify Google Maps crawler-google-places"
+   ```
+   로드에 성공하면 그 도구가 활성화되어 곧바로 호출할 수 있다.
+
+**3) 어디에도 없을 때만 방법 B** — 활성 도구 목록에도, deferred tools 목록에도
+   Apify 도구가 **전혀 없을 때만** → 방법 B (내장 places_search) 사용.
+
+> ⚠️ **"도구 목록에 눈에 안 띈다"는 이유만으로 방법 B로 넘어가지 않는다.**
+> 반드시 deferred tools 목록까지 확인하고, 거기 있으면 `tool_search`로 로드해서 방법 A를 쓴다.
+> 방법 A 호출이 실제로 에러로 실패한 경우에 한해 방법 B로 폴백하고, 폴백했다는
+> 사실을 보고서 말미에 한 줄로 명시한다.
 
 ---
 
@@ -315,7 +328,7 @@ web_search → "{지역명} 개발 호재 {올해연도} {내년연도}"
 1. **텍스트 보고서를 먼저 채팅에 출력**한 뒤, **그 다음에 HTML 지도를 생성**한다
 2. 텍스트 보고서는 **별도 파일 생성 없이 채팅 텍스트로 직접 출력**한다
 3. HTML 지도 생성이 실패하더라도 텍스트 보고서는 이미 전달된 상태여야 한다
-4. **Apify MCP 연결 여부를 먼저 확인**하고, 연결 시 Apify / 미연결 시 내장 places_search 사용
+4. **Apify 도구는 활성 도구 목록 + deferred tools 목록을 모두 확인**한다. deferred 상태면 `tool_search`로 로드해 방법 A(Apify) 사용. 두 목록 어디에도 없을 때만 방법 B(내장 places_search) 사용
 5. **Apify locationQuery는 반드시 영문 시 단위**로 설정 (한글 동 단위 X) — Apify 사용 시에만 해당
 6. **searchStringsArray는 한글 키워드 + 동명** 조합 — Apify 사용 시에만 해당
 7. **공원묘지는 공원 카테고리에서 제외**한다
